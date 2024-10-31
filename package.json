@@ -1,0 +1,31 @@
+{
+  "name": "wasm-tailscale-react-vite",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "build:wasm": "cmd /C \"cd wasm && set GOOS=js&& set GOARCH=wasm&& go build -o main.wasm main.go&& copy main.wasm ..\\public\\main.wasm\"",
+    "setup:wasm": "copy %GOROOT%\\misc\\wasm\\wasm_exec.js public\\"
+  },
+  "dependencies": {
+    "@tailscale/connect": "^1.39.98-t02582083d-gf31108a29",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.13.0",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "eslint": "^9.13.0",
+    "eslint-plugin-react": "^7.37.1",
+    "eslint-plugin-react-hooks": "^5.0.0",
+    "eslint-plugin-react-refresh": "^0.4.13",
+    "globals": "^15.11.0",
+    "vite": "^5.4.9"
+  }
+}

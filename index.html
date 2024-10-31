@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Vite + React</title>
+  <script src="wasm_exec.js"></script>
+  <!-- <script src="wasm_tinygo/wasm_exec.js"></script>
+  <script>
+    const go = new Go();
+    const WASM_URL = '/wasm_tinygo/tinygo_main.wasm';
+
+    var wasm;
+
+    if ('instantiateStreaming' in WebAssembly) {
+      WebAssembly.instantiateStreaming(fetch(WASM_URL), go.importObject).then(function (obj) {
+        wasm = obj.instance;
+        go.run(wasm);
+      })
+    } else {
+      fetch(WASM_URL).then(resp =>
+        resp.arrayBuffer()
+      ).then(bytes =>
+        WebAssembly.instantiate(bytes, go.importObject).then(function (obj) {
+          wasm = obj.instance;
+          go.run(wasm);
+        })
+      )
+    }
+  </script> -->
+</head>
+
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.jsx"></script>
+</body>
+
+</html>
