@@ -5,6 +5,7 @@
 
 - 没有wasm-opt优化
 - 没有构建版本信息
+- 包含的authkey为测试key
 
 在项目根目录运行`npm run build:wasm`来构建wasm文件并复制到public目录
 
