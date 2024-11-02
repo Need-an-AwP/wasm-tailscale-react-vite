@@ -20,9 +20,10 @@ export async function initIPN() {
 
         const ipn = window.newIPN({
             stateStorage: sessionStateStorage,
-            authKey: 'tskey-auth-kosWk4uE3311CNTRL-1PrBU5cG4UHkaesJoZyCUHHtpRnLs2uD',
+            authKey: import.meta.env.VITE_NODE_AUTH_KEY,
             hostname: 'wasm-tsconnect-testNode',
         });
+        // console.log(import.meta.env.VITE_NODE_AUTH_KEY);
 
         return ipn;
     } catch (err) {
