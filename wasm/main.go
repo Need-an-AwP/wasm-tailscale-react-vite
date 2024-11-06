@@ -1,17 +1,20 @@
 package main
 
 import (
-	// "bytes"
+	"bytes"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 	"log"
 	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/netip"
 	"strings"
+	"sync"
 	"syscall/js"
 	"time"
 
@@ -59,6 +62,9 @@ type jsIPN struct {
 	authKey    string
 	hostname   string
 	netChecker *netcheck.Client
+	httpServer *http.Server
+	wsConns    sync.Map
+	wsCallback js.Value
 }
 
 var jsIPNState = map[ipn.State]string{
@@ -183,6 +189,12 @@ func newIPN(jsConfig js.Value) map[string]any {
 		authKey:    authKey,
 		hostname:   hostname,
 		netChecker: netChecker,
+		httpServer: nil,
+		wsCallback: js.Value{},
+	}
+
+	if callback := jsConfig.Get("wsCallback"); callback.Type() == js.TypeFunction {
+		jsIPN.wsCallback = callback
 	}
 
 	return map[string]any{
@@ -206,6 +218,30 @@ func newIPN(jsConfig js.Value) map[string]any {
 			}
 			jsIPN.login()
 			return nil
+		}),
+		"logout": js.FuncOf(func(this js.Value, args []js.Value) any {
+			if len(args) != 0 {
+				log.Printf("Usage: logout()")
+				return nil
+			}
+			jsIPN.logout()
+			return nil
+		}),
+		"startHTTPServer": js.FuncOf(func(this js.Value, args []js.Value) any {
+			if len(args) != 1 {
+				log.Printf("Usage: startHTTPServer(port)")
+				return nil
+			}
+			return jsIPN.startHTTPServer(args[0].Int())
+		}),
+		"fetch": js.FuncOf(func(this js.Value, args []js.Value) any {
+			if len(args) != 1 {
+				log.Printf("Usage: fetch(url)")
+				return nil
+			}
+
+			url := args[0].String()
+			return jsIPN.fetch(url)
 		}),
 		"netCheck": js.FuncOf(func(this js.Value, args []js.Value) any {
 			// 创建 Promise
@@ -390,6 +426,132 @@ func (i *jsIPN) logout() {
 	}()
 }
 
+func (i *jsIPN) fetch(url string) js.Value {
+	return makePromise(func() (any, error) {
+		c := &http.Client{
+			Transport: &http.Transport{
+				DialContext: i.dialer.UserDial,
+			},
+		}
+		res, err := c.Get(url)
+		if err != nil {
+			return nil, err
+		}
+
+		return map[string]any{
+			"status":     res.StatusCode,
+			"statusText": res.Status,
+			"text": js.FuncOf(func(this js.Value, args []js.Value) any {
+				return makePromise(func() (any, error) {
+					defer res.Body.Close()
+					buf := new(bytes.Buffer)
+					if _, err := buf.ReadFrom(res.Body); err != nil {
+						return nil, err
+					}
+					return buf.String(), nil
+				})
+			}),
+			// TODO: populate a more complete JS Response object
+		}, nil
+	})
+}
+
+// 添加新的连接
+func (i *jsIPN) addWSConn(id string, conn *websocket.Conn) {
+	i.wsConns.Store(id, conn)
+}
+
+// 移除连接
+func (i *jsIPN) removeWSConn(id string) {
+	i.wsConns.Delete(id)
+}
+
+// 获取所有活跃连接
+func (i *jsIPN) getWSConns() []*websocket.Conn {
+	conns := make([]*websocket.Conn, 0)
+	i.wsConns.Range(func(key, value interface{}) bool {
+		if conn, ok := value.(*websocket.Conn); ok {
+			conns = append(conns, conn)
+		}
+		return true
+	})
+	return conns
+}
+
+func (i *jsIPN) startHTTPServer(port int) js.Value {
+	return makePromise(func() (any, error) {
+		// 创建多路复用器
+		mux := http.NewServeMux()
+
+		// 添加测试路由
+		mux.HandleFunc("/hello", func(w http.ResponseWriter, r *http.Request) {
+			fmt.Fprintf(w, "Hello from %s!", i.hostname)
+		})
+
+		mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+			// 升级HTTP连接为WebSocket
+			upgrader := websocket.Upgrader{
+				CheckOrigin: func(r *http.Request) bool {
+					return true // 允许所有来源
+				},
+			}
+
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				log.Printf("WebSocket upgrade failed: %v", err)
+				return
+			}
+
+			// 为连接生成唯一ID
+			connID := uuid.New().String()
+			i.addWSConn(connID, conn)
+
+			// 处理连接
+			go func() {
+				defer func() {
+					conn.Close()
+					i.removeWSConn(connID)
+				}()
+
+				for {
+					_, message, err := conn.ReadMessage()
+					if err != nil {
+						log.Printf("WebSocket read error: %v", err)
+						return
+					}
+
+					if !i.wsCallback.IsUndefined() {
+						i.wsCallback.Invoke(string(message))
+					}
+				}
+			}()
+		})
+
+		// 创建HTTP服务器
+		i.httpServer = &http.Server{
+			Addr:    fmt.Sprintf(":%d", port),
+			Handler: mux,
+		}
+
+		// 启动服务器
+		listener, err := net.Listen("tcp", i.httpServer.Addr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create listener: %v", err)
+		}
+
+		go func() {
+			if err := i.httpServer.Serve(listener); err != http.ErrServerClosed {
+				log.Printf("HTTP server error: %v", err)
+			}
+		}()
+
+		return map[string]any{
+			"port": port,
+			"addr": listener.Addr().String(),
+		}, nil
+	})
+}
+
 type jsNetMap struct {
 	Self      jsNetMapSelfNode   `json:"self"`
 	Peers     []jsNetMapPeerNode `json:"peers"`
@@ -475,6 +637,27 @@ func generateHostname() string {
 	return fmt.Sprintf("%s-%s", tail, scale)
 }
 
+// makePromise handles the boilerplate of wrapping goroutines with JS promises.
+// f is run on a goroutine and its return value is used to resolve the promise
+// (or reject it if an error is returned).
+func makePromise(f func() (any, error)) js.Value {
+	handler := js.FuncOf(func(this js.Value, args []js.Value) any {
+		resolve := args[0]
+		reject := args[1]
+		go func() {
+			if res, err := f(); err == nil {
+				resolve.Invoke(res)
+			} else {
+				reject.Invoke(err.Error())
+			}
+		}()
+		return nil
+	})
+
+	promiseConstructor := js.Global().Get("Promise")
+	return promiseConstructor.New(handler)
+}
+
 const logPolicyStateKey = "log-policy"
 
 func getOrCreateLogPolicyConfig(state ipn.StateStore) *logpolicy.Config {
@@ -497,47 +680,6 @@ func getOrCreateLogPolicyConfig(state ipn.StateStore) *logpolicy.Config {
 	}
 	return config
 }
-
-/*
-type Config struct {
-    Collection     string          // collection name, a domain name
-    PrivateID      logid.PrivateID // private ID for the primary log stream
-    CopyPrivateID  logid.PrivateID // private ID for a log stream that is a superset of this log stream
-    BaseURL        string          // if empty defaults to "https://log.tailscale.io"
-    HTTPC          *http.Client    // if empty defaults to http.DefaultClient
-    SkipClientTime bool            // if true, client_time is not written to logs
-    LowMemory      bool            // if true, logtail minimizes memory use
-    Clock          tstime.Clock    // if set, Clock.Now substitutes uses of time.Now
-    Stderr         io.Writer       // if set, logs are sent here instead of os.Stderr
-    StderrLevel    int             // max verbosity level to write to stderr; 0 means the non-verbose messages only
-    Buffer         Buffer          // temp storage, if nil a MemoryBuffer
-    CompressLogs   bool            // whether to compress the log uploads
-
-    // MetricsDelta, if non-nil, is a func that returns an encoding
-    // delta in clientmetrics to upload alongside existing logs.
-    // It can return either an empty string (for nothing) or a string
-    // that's safe to embed in a JSON string literal without further escaping.
-    MetricsDelta func() string
-
-    // FlushDelayFn, if non-nil is a func that returns how long to wait to
-    // accumulate logs before uploading them. 0 or negative means to upload
-    // immediately.
-    //
-    // If nil, a default value is used. (currently 2 seconds)
-    FlushDelayFn func() time.Duration
-
-    // IncludeProcID, if true, results in an ephemeral process identifier being
-    // included in logs. The ID is random and not guaranteed to be globally
-    // unique, but it can be used to distinguish between different instances
-    // running with same PrivateID.
-    IncludeProcID bool
-
-    // IncludeProcSequence, if true, results in an ephemeral sequence number
-    // being included in the logs. The sequence number is incremented for each
-    // log message sent, but is not persisted across process restarts.
-    IncludeProcSequence bool
-}
-*/
 
 // noCORSTransport wraps a RoundTripper and forces the no-cors mode on requests,
 // so that we can use it with non-CORS-aware servers.

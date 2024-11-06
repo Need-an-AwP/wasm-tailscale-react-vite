@@ -1,12 +1,41 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { initIPN } from '../ipn-init';
 
-const IPNStatus = ({ ipn }) => {
+const IPNStatus = () => {
+    const [ipn, setIpn] = useState(null);
+    const initRef = useRef(false);
+
+    useEffect(() => {
+        const wsCallback = (message) => {
+            try {
+                const data = JSON.parse(message);
+                // 在这里处理接收到的消息
+                console.log("Received JSON message via callback at ws server:", data);
+            } catch (e) {
+                console.log("Received raw message at ws server:", message);
+            }
+        };
+
+        const initIPNInstance = async () => {
+            if (initRef.current) return;
+            initRef.current = true;
+
+            const ipnInstance = await initIPN({ wsCallback });
+            if (ipnInstance) {
+                setIpn(ipnInstance);
+            }
+        }
+
+        initIPNInstance();
+    }, []);
+
     const [ipnState, setIpnState] = useState("NoState");
     const [netMap, setNetMap] = useState(null);
     const [browseToURL, setBrowseToURL] = useState(null);
     const [goPanicError, setGoPanicError] = useState(null);
     const [netCheckResult, setNetCheckResult] = useState(null);
     const [isChecking, setIsChecking] = useState(false);
+    const [isHTTPServerRunning, setIsHTTPServerRunning] = useState(false);
 
     useEffect(() => {
         if (!ipn) return;
@@ -19,12 +48,17 @@ const IPNStatus = ({ ipn }) => {
         });
     }, [ipn]);
 
-    const handleIPNState = (state) => {
+    const handleIPNState = async (state) => {
         setIpnState(state);
         if (state === "NeedsLogin") {
             ipn?.login();
         } else if (["Running", "NeedsMachineAuth"].includes(state)) {
             setBrowseToURL(undefined);
+            if (!isHTTPServerRunning) {
+                const res = await ipn.startHTTPServer(8848)
+                console.log(res)
+                setIsHTTPServerRunning(true);
+            }
         }
     };
 
@@ -67,11 +101,8 @@ const IPNStatus = ({ ipn }) => {
     return (
         <div className="ipn-status">
             {/* 状态显示 */}
-            <div className="status-header">
-                <h2>Tailscale Status</h2>
-                <div className="status-badge">
-                    {ipnState}
-                </div>
+            <div className="status-badge">
+                ipnstate:{ipnState}
             </div>
 
             <button onClick={handleNetCheck}>
@@ -108,10 +139,54 @@ const IPNStatus = ({ ipn }) => {
                     <div style={{ display: 'flex', flexDirection: 'column' }}>
                         <h3>peers</h3>
                         {netMap.peers.map((peer) => (
-                            <>
-                                <p>name: {peer.name}</p>
-                                <p>addresses: {peer.addresses.join(', ')}</p>
-                            </>
+                            <p>
+                                name: {peer.name}<br />
+                                addresses: {peer.addresses.join(', ')}<br />
+                                online: {peer.online ? 'true' : 'false'}<br />
+                                <button onClick={async () => {
+                                    ipn.fetch(`http://${peer.addresses[0]}:8848/hello`)
+                                        .then(res => res.text())
+                                        .then(text => console.log(text))
+                                }}>
+                                    fetch this peer on /hello
+                                </button>
+                                <button onClick={async () => {
+                                    // 使用Tailscale网络中的WebSocket连接
+                                    const ws = new WebSocket(`ws://${peer.addresses[0]}:8848/ws`);
+
+                                    ws.onopen = () => {
+                                        console.log(`WebSocket connected to \nws://${peer.addresses[0]}:8848/ws`);
+                                        // 发送测试消息
+                                        setInterval(() => {
+                                            console.log(`send message to ${peer.addresses[0]}`)
+                                            ws.send(JSON.stringify({
+                                                type: 'hello',
+                                                from: netMap.self.name,
+                                                message: `Hello from ${netMap.self.addresses[0]} in ws !`
+                                            }));
+                                        }, 1000);
+                                    };
+
+                                    ws.onmessage = (event) => {
+                                        try {
+                                            const data = JSON.parse(event.data);
+                                            console.log(`Received message from ${peer.name}:`, data);
+                                        } catch (e) {
+                                            console.log(`Received raw message from ${peer.name}:`, event.data);
+                                        }
+                                    };
+
+                                    ws.onerror = (error) => {
+                                        console.error(`WebSocket error with ${peer.name}:`, error);
+                                    };
+
+                                    ws.onclose = () => {
+                                        console.log(`WebSocket connection with ${peer.name} closed`);
+                                    };
+                                }}>
+                                    connect ws
+                                </button>
+                            </p>
                         ))}
                     </div>
 
