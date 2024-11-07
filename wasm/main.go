@@ -6,7 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/google/uuid"
+	// "github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"log"
 	"math/rand/v2"
@@ -456,16 +456,6 @@ func (i *jsIPN) fetch(url string) js.Value {
 	})
 }
 
-// 添加新的连接
-func (i *jsIPN) addWSConn(id string, conn *websocket.Conn) {
-	i.wsConns.Store(id, conn)
-}
-
-// 移除连接
-func (i *jsIPN) removeWSConn(id string) {
-	i.wsConns.Delete(id)
-}
-
 // 获取所有活跃连接
 func (i *jsIPN) getWSConns() []*websocket.Conn {
 	conns := make([]*websocket.Conn, 0)
@@ -489,6 +479,21 @@ func (i *jsIPN) startHTTPServer(port int) js.Value {
 		})
 
 		mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+			// 获取客户端IP
+			clientIP := r.RemoteAddr
+			if ip := r.Header.Get("X-Real-IP"); ip != "" {
+				clientIP = ip
+			} else if ip = r.Header.Get("X-Forwarded-For"); ip != "" {
+				clientIP = strings.Split(ip, ",")[0]
+			}
+
+			// 如果已存在该IP的连接,关闭旧连接
+			if oldConn, exists := i.wsConns.Load(clientIP); exists {
+				if conn, ok := oldConn.(*websocket.Conn); ok {
+					conn.Close()
+				}
+			}
+
 			// 升级HTTP连接为WebSocket
 			upgrader := websocket.Upgrader{
 				CheckOrigin: func(r *http.Request) bool {
@@ -502,23 +507,45 @@ func (i *jsIPN) startHTTPServer(port int) js.Value {
 				return
 			}
 
-			// 为连接生成唯一ID
-			connID := uuid.New().String()
-			i.addWSConn(connID, conn)
+			i.wsConns.Store(clientIP, conn)
+			log.Printf("new WebSocket connection ID: %s", clientIP)
 
 			// 处理连接
 			go func() {
 				defer func() {
 					conn.Close()
-					i.removeWSConn(connID)
+					i.wsConns.Delete(clientIP)
 				}()
 
+				conn.SetPingHandler(func(data string) error {
+					return conn.WriteControl(websocket.PongMessage, []byte("pong"), time.Now().Add(time.Second))
+				})
+
 				for {
-					_, message, err := conn.ReadMessage()
+					messageType, message, err := conn.ReadMessage()
 					if err != nil {
 						log.Printf("WebSocket read error: %v", err)
 						return
 					}
+					
+					if messageType == websocket.BinaryMessage && len(message) == 1 && message[0] == 1 {
+						// 发送 pong 响应
+						err := conn.WriteMessage(websocket.BinaryMessage, []byte{2}) // 2 表示 pong
+						if err != nil {
+							log.Printf("Error sending pong: %v", err)
+							return
+						}
+						continue
+					}
+
+					// if messageType == websocket.TextMessage && string(message) == "ping" {
+					//     err := conn.WriteMessage(websocket.TextMessage, []byte("pong"))
+					//     if err != nil {
+					//         log.Printf("Error sending pong: %v", err)
+					//         return
+					//     }
+					//     continue
+					// }
 
 					if !i.wsCallback.IsUndefined() {
 						i.wsCallback.Invoke(string(message))

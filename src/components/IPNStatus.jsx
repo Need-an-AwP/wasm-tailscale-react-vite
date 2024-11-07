@@ -139,7 +139,7 @@ const IPNStatus = () => {
                     <div style={{ display: 'flex', flexDirection: 'column' }}>
                         <h3>peers</h3>
                         {netMap.peers.map((peer) => (
-                            <p>
+                            <p key={peer.name}>
                                 name: {peer.name}<br />
                                 addresses: {peer.addresses.join(', ')}<br />
                                 online: {peer.online ? 'true' : 'false'}<br />
