@@ -18,7 +18,7 @@ tailscale netcheck
 在运行`npm run dev`前，你需要在项目根目录创建`.env`文件，其中需要包含以下变量
 
 ```
-VITE_CONTROL_URL=*private controller url*
+VITE_NODE_AUTH_KEY=*your authkey*
 ```
 ~~启用或禁用连接到私有controller，修改[src/ipn-init.js](./src/ipn-init.js#L4)中的`usingPrivateController`变量~~
 不再尝试使用headscale生成的authkey，仅使用tailscale官方控制器生成的authkey

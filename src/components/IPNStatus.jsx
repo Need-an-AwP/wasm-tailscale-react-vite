@@ -150,7 +150,8 @@ const IPNStatus = () => {
                                 }}>
                                     fetch this peer on /hello
                                 </button>
-                                <button onClick={async () => {
+                                {/* ws is not available, previous success is because local tailscale client is running*/}
+                                {/* <button onClick={async () => {
                                     // 使用Tailscale网络中的WebSocket连接
                                     const ws = new WebSocket(`ws://${peer.addresses[0]}:8848/ws`);
 
@@ -185,7 +186,7 @@ const IPNStatus = () => {
                                     };
                                 }}>
                                     connect ws
-                                </button>
+                                </button> */}
                             </p>
                         ))}
                     </div>
